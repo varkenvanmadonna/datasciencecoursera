@@ -1,0 +1,189 @@
+#Prediction of the classe based on exercise results
+
+##Summary
+
+I loaded the data and deleted the majority of the columns as they contained either blanks or NA values. After this operation, 60 columns were left. I also removed the first 7 columns to end up with only 53
+A PCA exercise shows that the variability is quite spread and that the PCA1 and 2 only account for around 32% of variation. better use everything!
+I trained 3 models on the data : linear support Vector Machine, Random forest and Gradient boost. Random forest came out on top.
+Training was done using 10 fold cross validation repeated 3 times.
+The out of sample error for the best scoring random forest model is 0.44
+Finally, I predicted the class of each of the 20 training records
+
+
+
+
+##Loading libraries and training
+
+Loading the necessary libraries and also genering a training and a testing set to be used
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+
+# loading the data
+
+#training file
+
+url<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+training<-read.csv(url)
+
+#training has 19622 records and 160 columns
+
+url2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testing<-read.csv(url2)
+
+#testing has 20 records and 160 columns
+# classe is the item we are trying to predict
+```
+
+##Data cleansing
+
+Quite a lot of NA values in the data set.Some blanks do not appear to be NA's so we have to make them look like NA values.This is the amount of NA values
+
+
+
+creating a data set without the classe ( in training)and problem_id column ( in testing)
+
+```{r}
+training_clean<-training %>% select ( -c("classe"))
+classe<-training %>% select ( classe)
+
+testing_clean<-testing %>% select ( -c("problem_id"))
+problem_id<-testing %>% select ( problem_id)
+```
+
+Mutating the data sets to turn blanks in NA values
+
+```{r}
+training_clean <- training_clean %>%
+        mutate_at(vars(colnames(.)),
+                  .funs = funs(ifelse(.=="", NA, as.numeric(.))))
+testing_clean <- testing_clean %>%
+        mutate_at(vars(colnames(.)),
+                  .funs = funs(ifelse(.=="", NA, as.numeric(.))))
+# when I count the NA's this time, I get more
+nacount<-sapply(training, function(x) sum(is.na(x)))
+nacount
+
+```
+
+Now getting rid of the columns containing a lot of NA
+
+```{r}
+training_clean<-training_clean %>% 
+        purrr::discard(~sum(is.na(.x))/length(.x)* 100 >=50)
+
+testing_clean<-testing_clean %>% 
+        purrr::discard(~sum(is.na(.x))/length(.x)* 100 >=50)
+```
+
+Data sets with the problem_id and classe variables added back in
+
+```{r}
+training_clean<-cbind(training_clean,classe)
+testing_clean<-cbind(testing_clean,problem_id)
+```
+
+Removing some more columns containing dates and user names. I do not wish to use those for predictions. The final training_fin sets contain the clean data minus the useless columns
+
+```{r}
+training_fin<-select(training_clean,-c(1:7))
+testing_fin<-select(testing_clean,-c(1:7))
+training_fin$classe<-as.factor(training_fin$classe)
+```
+
+##Data exploration
+
+I decided to do a PCA analysis to see how many columns are important.I did it on the training_clean data. Here is a plot depicting how the different classes are distributed. Doesn't say much. We do see 5 categories but they are not necessarily very separated from each other
+
+```{r}
+
+training_clean<-training_clean %>% select ( -c("classe"))
+pca<-prcomp(training_clean,scale=TRUE)
+
+
+plot(pca$x[,1],pca$x[,2],col=training$classe)
+```
+
+When we plot how each principal component contributes to the variation then we see that PCA1 and 2 account for about 15% each, which is not a lot. This means we better use all attributes available
+
+
+
+```{r}
+pca.var<-pca$sdev^2
+pca.var.per<-round(pca.var/sum(pca.var)*100,1)
+barplot(pca.var.per,main="scree plot",xlab="principal component",ylab="percentage variation")
+```
+
+Here we look at the loading scores : the importance of each attribute
+
+```{r}
+loading_scores <- pca$rotation[,1]
+move_scores <- abs(loading_scores) ## get the magnitudes
+move_score_ranked <- sort(move_scores, decreasing=TRUE)
+top_10_moves <- names(move_score_ranked[1:10])
+
+##top_10_moves ## show the names of the top 10 contributors
+
+pca$rotation[top_10_moves,1] 
+```
+
+Better use all attributes
+
+##Training and crossvalidation
+
+I chose to train using 3 models : linear support vector machine, random forest and gradient boost
+
+I trained each of the models using 10 fold cross validation repeated 3 times to consider out-of-sample errors
+
+### cross validation
+
+I set train control to 
+
+```{r}
+train.control<- trainControl(method = "repeatedcv", 
+                              number = 10, repeats = 3)
+```
+
+and will use it in all training                        
+
+###training
+
+I fitted the 3 models using gradient boost, random forest and support vector machine respectively
+
+```{r chachedChunk, cache=TRUE,results="hide"}
+fit_gbm<-train(classe~.,method="gbm",data=training_fin,trControl=train.control)
+fit_rf<-train(classe~.,method="rf",data=training_fin,trControl=train.control)
+fit_svm_Linear <- train( classe~., data = training_fin, method = "svmLinear",
+                         trControl=train.control,
+                         preProcess = c("center", "scale"),
+                         tuneLength = 10)
+```
+
+
+When looking at the results, then the random forest model wins, followed closely by the gradient boost. We'll go for the random forest
+
+```{r}
+
+print(fit_gbm)
+print(fit_rf)
+print(fit_svm_Linear)
+```
+
+
+the OUT-OF-SAMPE error that is to be expected for the random forest model is to be seen here : 
+
+```{r}
+fit_rf$finalModel
+```
+
+##Predictions
+
+I use the random forest model to predict the testing set and will show the results associated with the problem_id numbers from the test set
+
+```{r}
+testing_fin<-testing_fin %>% select ( -c("problem_id"))
+Pred_rf<-predict(fit_rf,testing_fin)
+results<-cbind(Pred_rf,problem_id)
+results
